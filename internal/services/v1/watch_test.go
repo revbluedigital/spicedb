@@ -64,11 +64,11 @@ func TestWatch(t *testing.T) {
 			expectedCode: codes.OK,
 			mutations: []*v1.RelationshipUpdate{
 				update(v1.RelationshipUpdate_OPERATION_CREATE, "document", "document1", "viewer", "user", "user1"),
-				update(v1.RelationshipUpdate_OPERATION_DELETE, "folder", "folder1", "viewer", "user", "user1"),
+				update(v1.RelationshipUpdate_OPERATION_DELETE, "folder", "auditors", "viewer", "user", "auditor"),
 				update(v1.RelationshipUpdate_OPERATION_TOUCH, "folder", "folder2", "viewer", "user", "user1"),
 			},
 			expectedUpdates: []*v1.RelationshipUpdate{
-				update(v1.RelationshipUpdate_OPERATION_CREATE, "document", "document1", "viewer", "user", "user1"),
+				update(v1.RelationshipUpdate_OPERATION_TOUCH, "document", "document1", "viewer", "user", "user1"),
 				update(v1.RelationshipUpdate_OPERATION_DELETE, "folder", "folder1", "viewer", "user", "user1"),
 				update(v1.RelationshipUpdate_OPERATION_TOUCH, "folder", "folder2", "viewer", "user", "user1"),
 			},
@@ -80,10 +80,10 @@ func TestWatch(t *testing.T) {
 			mutations: []*v1.RelationshipUpdate{
 				update(v1.RelationshipUpdate_OPERATION_CREATE, "document", "document1", "viewer", "user", "user1"),
 				update(v1.RelationshipUpdate_OPERATION_TOUCH, "document", "document2", "viewer", "user", "user1"),
-				update(v1.RelationshipUpdate_OPERATION_DELETE, "folder", "folder1", "viewer", "user", "user1"),
+				update(v1.RelationshipUpdate_OPERATION_DELETE, "folder", "auditors", "viewer", "user", "auditor"),
 			},
 			expectedUpdates: []*v1.RelationshipUpdate{
-				update(v1.RelationshipUpdate_OPERATION_CREATE, "document", "document1", "viewer", "user", "user1"),
+				update(v1.RelationshipUpdate_OPERATION_TOUCH, "document", "document1", "viewer", "user", "user1"),
 				update(v1.RelationshipUpdate_OPERATION_TOUCH, "document", "document2", "viewer", "user", "user1"),
 			},
 		},
@@ -106,10 +106,7 @@ func TestWatch(t *testing.T) {
 			rawDS, err := memdb.NewMemdbDatastore(0, 0, memdb.DisableGC, 0)
 			require.NoError(err)
 
-			ds, _ := testfixtures.StandardDatastoreWithSchema(rawDS, require)
-
-			revision, err := ds.SyncRevision(context.Background())
-			require.NoError(err)
+			ds, revision := testfixtures.StandardDatastoreWithData(rawDS, require)
 			require.True(revision.GreaterThan(decimal.Zero))
 
 			client, stop := newWatchServicer(require, ds)
@@ -162,16 +159,18 @@ func TestWatch(t *testing.T) {
 				require.NoError(err)
 
 				var receivedUpdates []*v1.RelationshipUpdate
-				select {
-				case updates := <-updatesChan:
-					receivedUpdates = updates
-				case <-time.After(3 * time.Second):
-					require.FailNow("timed out waiting for updates")
-					return
+
+				for len(receivedUpdates) < len(tc.expectedUpdates) {
+					select {
+					case updates := <-updatesChan:
+						receivedUpdates = append(receivedUpdates, updates...)
+						fmt.Printf("expected: %v\n", tc.expectedUpdates)
+						fmt.Printf("received: %v\n", receivedUpdates)
+					case <-time.After(1 * time.Second):
+						require.FailNow("timed out waiting for updates")
+						return
+					}
 				}
-
-				require.Equal(len(tc.expectedUpdates), len(receivedUpdates))
-
 			} else {
 				_, err := stream.Recv()
 				grpcutil.RequireStatus(t, tc.expectedCode, err)
